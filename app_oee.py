@@ -4,6 +4,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 
+
+# Definimos las claves para conectar a la nube
+mqtt_user = st.secrets["MQTT_USER"]
+mqtt_pass = st.secrets["MQTT_PASS"]
+
 # Configuración de pantalla ancha para terminales industriales y Smart TVs
 st.set_page_config(page_title="SaaS OEE - Core Global de Planta", layout="wide")
 st.markdown("""
