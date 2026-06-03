@@ -101,6 +101,28 @@ if "db_historial_planta" not in st.session_state:
 
 if "sub_modulo_analisis" not in st.session_state:
     st.session_state.sub_modulo_analisis = "Disponibilidad"
+# =========================================================================
+# RECEPTOR DE GOLPES EN TIEMPO REAL DESDE EL ESP32
+# =========================================================================
+# Leemos si la placa mandó datos en la dirección web
+query_params = st.query_params
+
+if "evento" in query_params and query_params["evento"] == "golpe" and "maquina" in query_params:
+    if query_params["maquina"] == "M1":
+        # Buscamos la última fila de la Inyectora en tu tabla de datos para sumarle 1
+        maquina_nombre = "DEMOWIDEM 1 (Inyectora)"
+        
+        # Filtramos las filas de la máquina 1
+        filas_maquina = st.session_state.db_historial_planta["Maquina"] == maquina_nombre
+        
+        if filas_maquina.any():
+            # Agarramos la última hora registrada y le sumamos un golpe a las piezas Buenas
+            ultimo_idx = st.session_state.db_historial_planta[filas_maquina].index[-1]
+            st.session_state.db_historial_planta.at[ultimo_idx, "Buenas"] += 1
+            
+            # Cambiamos el estado en el Andón a PRODUCIENDO automáticamente
+            st.session_state.db_objetivos[maquina_nombre]["Estado_TR"] = "PRODUCIENDO"
+            st.session_state.db_objetivos[maquina_nombre]["Ultimo_Evento"] = "Contando Golpes Online"
 
 # =========================================================================
 # 2. CONTROL DE SESIÓN Y PARED DE LOGUEO (PAYWALL)
