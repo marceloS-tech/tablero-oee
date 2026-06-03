@@ -520,19 +520,31 @@ elif "7." in capa_activa:
                     st.markdown(f"<div style='background-color:{color_estado}; color:white; padding:5px; border-radius:3px; text-align:center;'><b>{estado}:</b> {evento}</div>", unsafe_allow_html=True)
                 else:
                     st.success(f"🟢 {estado}")
-# --- LOGICA DE MODO TV (CARRUSEL AUTOMÁTICO) ---
-# Inyectamos JS para que cambie de capa cada 10 segundos
+# =========================================================================
+# CONTROL AUTOMÁTICO DE PANTALLA Y REFRESCO DE DATOS (REEMPLAZAR ABAJO DE TODO)
+# =========================================================================
 st.markdown("""
 <script>
-    // Buscamos los radio buttons del sidebar (los módulos licenciados)
-    // Streamlit asigna índices, iteramos y hacemos clic
+    // 1. Cambiador automático de módulos (Cada 10 segundos)
     var index = 0;
     setInterval(function() {
         var radios = window.parent.document.querySelectorAll('input[type="radio"]');
         if (radios.length > 0) {
-            index = (index + 1) % radios.length; // Cicla entre 0 y 10 (11 vistas)
+            index = (index + 1) % radios.length;
             radios[index].click();
         }
-    }, 10000); // 10000ms = 10 segundos
+    }, 10000); 
+
+    // 2. REFRESCO DE PANTALLA EN VIVO (Cada 2 segundos)
+    // Esto obliga a la web a mirar si la placa sumó un golpe nuevo sin que vos aprietes F5
+    setInterval(function() {
+        var reloadButton = window.parent.document.querySelector('button[title="Refresh"]');
+        if (reloadButton) {
+            reloadButton.click();
+        } else {
+            // Si no encuentra el botón interno, hace un refresco suave de la app
+            window.parent.location.reload();
+        }
+    }, 2000); // 2000ms = 2 segundos
 </script>
 """, unsafe_allow_html=True)
