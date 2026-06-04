@@ -4,18 +4,80 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import os
+import json
 
-# 1. CONFIGURACIÓN DE PANTALLA PRINCIPAL
+# 1. CONFIGURACIÓN DE PANTALLA PRINCIPAL (Debe ser la primera directiva)
 st.set_page_config(page_title="SaaS OEE - Core Global de Planta", layout="wide")
 
-# Credenciales seguras desde los Secrets
+# Credenciales desde los Secrets
 mqtt_user = st.secrets["MQTT_USER"]
 mqtt_pass = st.secrets["MQTT_PASS"]
 
-# =========================================================================
-# BLOQUES DE INYECCIÓN WEB (Estilos y Automatización de Pestañas)
-# =========================================================================
+# Archivos de persistencia de datos (La "Base de Datos" de la prueba)
+HISTORIAL_FILE = "db_historial_planta.csv"
+OBJETIVOS_FILE = "db_objetivos_planta.json"
 
+# --- Inicialización de archivos locales si no existen ---
+if not os.path.exists(HISTORIAL_FILE):
+    df_init = pd.DataFrame([
+        {"Hora": "06:00-07:00", "Maquina": "DEMOWIDEM 1 (Inyectora)", "Tipo": "Automático", "Operario": "VILLARROEL ENZO", "Meta": 60, "Buenas": 58, "Retrabajo": 1, "Observadas": 1, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": True},
+        {"Hora": "07:00-08:00", "Maquina": "DEMOWIDEM 1 (Inyectora)", "Tipo": "Automático", "Operario": "VILLARROEL ENZO", "Meta": 60, "Buenas": 59, "Retrabajo": 0, "Observadas": 1, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": True},
+        {"Hora": "08:00-09:00", "Maquina": "DEMOWIDEM 1 (Inyectora)", "Tipo": "Automático", "Operario": "VILLARROEL ENZO", "Meta": 60, "Buenas": 38, "Retrabajo": 2, "Observadas": 0, "Min_Parada": 15, "Falla": "Falla Robótica", "Es_Falla_Tecnica": True, "Validado": False},
+        {"Hora": "06:00-07:00", "Maquina": "DEMOWIDEM 2 (Banco Manual)", "Tipo": "Manual", "Operario": "FRANCO MAXIMILIANO", "Meta": 40, "Buenas": 35, "Retrabajo": 2, "Observadas": 1, "Min_Parada": 5, "Falla": "Ajuste de Banco", "Es_Falla_Tecnica": False, "Validado": True},
+        {"Hora": "07:00-08:00", "Maquina": "DEMOWIDEM 2 (Banco Manual)", "Tipo": "Manual", "Operario": "FRANCO MAXIMILIANO", "Meta": 40, "Buenas": 18, "Retrabajo": 1, "Observadas": 1, "Min_Parada": 25, "Falla": "Falla en la mesa de trabajo", "Es_Falla_Tecnica": True, "Validado": False},
+        {"Hora": "06:00-07:00", "Maquina": "DEMOWIDEM 3 (Prensa)", "Tipo": "Automático", "Operario": "MOREIRA CRISTIAN", "Meta": 80, "Buenas": 75, "Retrabajo": 3, "Observadas": 0, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": True},
+        {"Hora": "07:00-08:00", "Maquina": "DEMOWIDEM 3 (Prensa)", "Tipo": "Automático", "Operario": "MOREIRA CRISTIAN", "Meta": 80, "Buenas": 30, "Retrabajo": 2, "Observadas": 3, "Min_Parada": 40, "Falla": "Soporte del Líder", "Es_Falla_Tecnica": True, "Validado": False}
+    ])
+    df_init.to_csv(HISTORIAL_FILE, index=False)
+
+if not os.path.exists(OBJETIVOS_FILE):
+    obj_init = {
+        "DEMOWIDEM 1 (Inyectora)": {"Meta_Hora": 60, "Producto": "Carcasa Plástica A", "Estado_TR": "PRODUCIENDO", "Ultimo_Evento": "Ninguno"},
+        "DEMOWIDEM 2 (Banco Manual)": {"Meta_Hora": 40, "Producto": "Ensamble Eléctrico B", "Estado_TR": "SETUP", "Ultimo_Evento": "Logística: Falta Piezas"},
+        "DEMOWIDEM 3 (Prensa)": {"Meta_Hora": 80, "Producto": "Soporte Metálico C", "Estado_TR": "PARADA", "Ultimo_Evento": "Mantenimiento: Falla Mecánica"}
+    }
+    with open(OBJETIVOS_FILE, "w", encoding="utf-8") as f:
+        json.dump(obj_init, f, indent=4, ensure_ascii=False)
+
+# =========================================================================
+# RECEPTOR DE GOLPES IOT URL (ZONA LIBRE - Ejecuta antes del Login para el ESP)
+# =========================================================================
+query_params = st.query_params
+
+if "evento" in query_params and query_params["evento"] == "golpe":
+    maquina_param = query_params.get("maquina", "M1")
+    
+    # Mapeo de parámetro corto a nombre real
+    maquina_nombre = "DEMOWIDEM 1 (Inyectora)"
+    if maquina_param == "M2": maquina_nombre = "DEMOWIDEM 2 (Banco Manual)"
+    if maquina_param == "M3": maquina_nombre = "DEMOWIDEM 3 (Prensa)"
+    
+    # 1. Sumar pieza en el archivo CSV
+    if os.path.exists(HISTORIAL_FILE):
+        df_db = pd.read_csv(HISTORIAL_FILE)
+        filas_maquina = df_db["Maquina"] == maquina_nombre
+        if filas_maquina.any():
+            ultimo_idx = df_db[filas_maquina].index[-1]
+            df_db.at[ultimo_idx, "Buenas"] += 1
+            df_db.to_csv(HISTORIAL_FILE, index=False)
+            
+    # 2. Modificar estado en el archivo JSON
+    if os.path.exists(OBJETIVOS_FILE):
+        with open(OBJETIVOS_FILE, "r", encoding="utf-8") as f:
+            objs_db = json.load(f)
+        if maquina_nombre in objs_db:
+            objs_db[maquina_nombre]["Estado_TR"] = "PRODUCIENDO"
+            objs_db[maquina_nombre]["Ultimo_Evento"] = f"Golpe IoT recibido ({datetime.now().strftime('%H:%M:%S')})"
+        with open(OBJETIVOS_FILE, "w", encoding="utf-8") as f:
+            json.dump(objs_db, f, indent=4, ensure_ascii=False)
+            
+    # Retorno ultra rápido para el hardware. No gasta recursos en armar la web.
+    st.text(f"OK - Golpe registrado en {maquina_nombre}")
+    st.stop()
+
+# =========================================================================
+# BLOQUES DE INYECCIÓN WEB (Estilos CSS y Script de TV)
+# =========================================================================
 ESTILOS_CSS = """
 <style>
     .stApp { background-color: #0d1117; color: #ffffff; }
@@ -23,23 +85,17 @@ ESTILOS_CSS = """
     .kpi-title { font-size: 14px; color: #8b949e; font-weight: bold; text-align: left; margin-bottom: 12px; font-family: monospace; }
     .gauge-title { text-align: center; font-size: 15px; font-weight: bold; color: #8b949e; margin-bottom: -10px; font-family: monospace; }
     div[data-testid="stMetricLabel"] { font-size: 16px !important; font-weight: bold !important; color: #8b949e !important; }
-    
-    .vorne-card { background-color: #161b22; border-radius: 8px; border: 1px solid #30363d; color: white; padding: 20px; margin: 10px; font-family: sans-serif; }
-    
     .stButton > button {
         width: 100%; background-color: #161b22; color: #c9d1d9; border: 1px solid #30363d;
         padding: 10px; border-radius: 6px; font-weight: bold; transition: all 0.3s ease;
     }
     .stButton > button:hover { border-color: #00f2fe; color: #00f2fe; background-color: #1f242c; }
-    
     .andon-card { border-radius: 8px; padding: 20px; margin-bottom: 15px; border: 1px solid #30363d; font-family: monospace; }
     .andon-marcha { background-color: #0c2519; border-left: 8px solid #00cc66; }
     .andon-setup { background-color: #2b220c; border-left: 8px solid #ffaa00; }
     .andon-parada { background-color: #2d1215; border-left: 8px solid #ff4b4b; }
-    
     .andon-header { font-size: 22px; font-weight: bold; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
     .andon-meta-box { background: #1f242c; padding: 10px; border-radius: 4px; border: 1px solid #30363d; font-size: 13px; margin-top: 12px; }
-    
     .wiidem-badge { display: inline-block; padding: 4px 8px; font-weight: bold; border-radius: 4px; font-size: 12px; color: #000; margin-right: 5px; }
     .badge-v { background-color: #00cc66; }
     .badge-a { background-color: #ffaa00; }
@@ -106,7 +162,6 @@ if not st.session_state.autenticado:
 if not st.session_state.autenticado:
     st.stop()
 
-# Menú de usuario activo
 st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.usuario_conectado}`")
 if st.sidebar.button("🔴 Cerrar Sesión", use_container_width=True):
     st.session_state.autenticado = False
@@ -117,48 +172,19 @@ if st.sidebar.button("🔴 Cerrar Sesión", use_container_width=True):
 st.sidebar.markdown("---")
 
 # =========================================================================
-# 3. ARQUITECTURA DE DATOS CENTRALIZADA
+# 3. LECTURA DE DATOS DESDE LOS ARCHIVOS VIVOS
 # =========================================================================
 HORAS_TURNO = ["06:00-07:00", "07:00-08:00", "08:00-09:00", "09:00-10:00", "10:00-11:00", "11:00-12:00", "12:00-13:00", "13:00-14:00"]
 
-if "db_objetivos" not in st.session_state:
-    st.session_state.db_objetivos = {
-        "DEMOWIDEM 1 (Inyectora)": {"Meta_Hora": 60, "Producto": "Carcasa Plástica A", "Estado_TR": "PRODUCIENDO", "Ultimo_Evento": "Ninguno"},
-        "DEMOWIDEM 2 (Banco Manual)": {"Meta_Hora": 40, "Producto": "Ensamble Eléctrico B", "Estado_TR": "SETUP", "Ultimo_Evento": "Logística: Falta Piezas"},
-        "DEMOWIDEM 3 (Prensa)": {"Meta_Hora": 80, "Producto": "Soporte Metálico C", "Estado_TR": "PARADA", "Ultimo_Evento": "Mantenimiento: Falla Mecánica"}
-    }
+df_global = pd.read_csv(HISTORIAL_FILE)
+df_global["Es_Falla_Tecnica"] = df_global["Es_Falla_Tecnica"].astype(bool)
+df_global["Validado"] = df_global["Validado"].astype(bool)
 
-if "db_historial_planta" not in st.session_state:
-    st.session_state.db_historial_planta = pd.DataFrame([
-        {"Hora": "06:00-07:00", "Maquina": "DEMOWIDEM 1 (Inyectora)", "Tipo": "Automático", "Operario": "VILLARROEL ENZO", "Meta": 60, "Buenas": 58, "Retrabajo": 1, "Observadas": 1, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": True},
-        {"Hora": "07:00-08:00", "Maquina": "DEMOWIDEM 1 (Inyectora)", "Tipo": "Automático", "Operario": "VILLARROEL ENZO", "Meta": 60, "Buenas": 59, "Retrabajo": 0, "Observadas": 1, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": True},
-        {"Hora": "08:00-09:00", "Maquina": "DEMOWIDEM 1 (Inyectora)", "Tipo": "Automático", "Operario": "VILLARROEL ENZO", "Meta": 60, "Buenas": 38, "Retrabajo": 2, "Observadas": 0, "Min_Parada": 15, "Falla": "Falla Robótica", "Es_Falla_Tecnica": True, "Validado": False},
-        {"Hora": "06:00-07:00", "Maquina": "DEMOWIDEM 2 (Banco Manual)", "Tipo": "Manual", "Operario": "FRANCO MAXIMILIANO", "Meta": 40, "Buenas": 35, "Retrabajo": 2, "Observadas": 1, "Min_Parada": 5, "Falla": "Ajuste de Banco", "Es_Falla_Tecnica": False, "Validado": True},
-        {"Hora": "07:00-08:00", "Maquina": "DEMOWIDEM 2 (Banco Manual)", "Tipo": "Manual", "Operario": "FRANCO MAXIMILIANO", "Meta": 40, "Buenas": 18, "Retrabajo": 1, "Observadas": 1, "Min_Parada": 25, "Falla": "Falla en la mesa de trabajo", "Es_Falla_Tecnica": True, "Validado": False},
-        {"Hora": "06:00-07:00", "Maquina": "DEMOWIDEM 3 (Prensa)", "Tipo": "Automático", "Operario": "MOREIRA CRISTIAN", "Meta": 80, "Buenas": 75, "Retrabajo": 3, "Observadas": 0, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": True},
-        {"Hora": "07:00-08:00", "Maquina": "DEMOWIDEM 3 (Prensa)", "Tipo": "Automático", "Operario": "MOREIRA CRISTIAN", "Meta": 80, "Buenas": 30, "Retrabajo": 2, "Observadas": 3, "Min_Parada": 40, "Falla": "Soporte del Líder", "Es_Falla_Tecnica": True, "Validado": False}
-    ])
+with open(OBJETIVOS_FILE, "r", encoding="utf-8") as f:
+    db_objetivos = json.load(f)
 
 if "sub_modulo_analisis" not in st.session_state:
     st.session_state.sub_modulo_analisis = "Producción"
-
-# =========================================================================
-# 4. RECEPTOR DE GOLPES IOT URL
-# =========================================================================
-query_params = st.query_params
-
-if "evento" in query_params and query_params["evento"] == "golpe":
-    maquina_param = query_params.get("maquina", "M1")
-    if maquina_param == "M1":
-        maquina_nombre = "DEMOWIDEM 1 (Inyectora)"
-        filas_maquina = st.session_state.db_historial_planta["Maquina"] == maquina_nombre
-        if filas_maquina.any():
-            ultimo_idx = st.session_state.db_historial_planta[filas_maquina].index[-1]
-            st.session_state.db_historial_planta.at[ultimo_idx, "Buenas"] += 1
-            st.session_state.db_objetivos[maquina_nombre]["Estado_TR"] = "PRODUCIENDO"
-            st.session_state.db_objetivos[maquina_nombre]["Ultimo_Evento"] = f"Golpe IoT recibido ({datetime.now().strftime('%H:%M:%S')})"
-        st.query_params.clear()
-        st.rerun()
 
 # =========================================================================
 # 5. SELECTOR DE CAPAS MODULAR
@@ -178,7 +204,6 @@ capa_activa = st.sidebar.radio("Seleccione el nivel de pantalla:", list(capa_map
 st.sidebar.markdown("---")
 
 capa_codigo = capa_mapeada[capa_activa]
-df_global = st.session_state.db_historial_planta
 
 if capa_codigo not in st.session_state.permisos_usuario:
     st.markdown(f"""
@@ -207,13 +232,13 @@ def draw_scada_gauge(titulo_gauge, value):
     return fig
 
 # =========================================================================
-# 6. RENDERIZADO DE LAS CAPAS VISUALES ORIGINALES
+# 6. RENDERIZADO DE LAS CAPAS VISUALES 
 # =========================================================================
 
 if "1." in capa_activa:
     st.title("🖥️ Capa de Puesto - Monitor de Máquina")
-    maq_puesto = st.selectbox("Seleccione el Puesto a mostrar en este Monitor:", list(st.session_state.db_objetivos.keys()))
-    st.markdown(f"### 📍 Celda Activa: {maq_puesto} | **Producto:** `{st.session_state.db_objetivos[maq_puesto]['Producto']}`")
+    maq_puesto = st.selectbox("Seleccione el Puesto a mostrar en este Monitor:", list(db_objetivos.keys()))
+    st.markdown(f"### 📍 Celda Activa: {maq_puesto} | **Producto:** `{db_objetivos[maq_puesto]['Producto']}`")
     st.markdown("---")
     
     df_puesto = df_global[df_global["Maquina"] == maq_puesto].sort_values(by="Hora")
@@ -240,8 +265,8 @@ elif "2." in capa_activa:
     
     if clave_ing == "admin789":
         st.success("🔓 Acceso Concedido")
-        maq_obj = st.selectbox("Seleccione la Máquina a configurar:", list(st.session_state.db_objetivos.keys()))
-        datos_maq = st.session_state.db_objetivos.get(maq_obj, {})
+        maq_obj = st.selectbox("Seleccione la Máquina a configurar:", list(db_objetivos.keys()))
+        datos_maq = db_objetivos.get(maq_obj, {})
         c_obj1, c_obj2 = st.columns(2)
         with c_obj1:
             nueva_meta = st.number_input("Establecer nueva Meta de piezas por hora:", min_value=1, value=int(datos_maq.get("Meta_Hora", 50)))
@@ -249,9 +274,12 @@ elif "2." in capa_activa:
             nuevo_prod = st.text_input("Código o Nombre del Producto a fabricar:", value=datos_maq.get("Producto", "Sin Definir"))
             
         if st.button("💾 Aplicar Objetivos", use_container_width=True):
-            st.session_state.db_objetivos[maq_obj]["Meta_Hora"] = nueva_meta
-            st.session_state.db_objetivos[maq_obj]["Producto"] = nuevo_prod
-            st.success("¡Objetivos actualizados!")
+            db_objetivos[maq_obj]["Meta_Hora"] = nueva_meta
+            db_objetivos[maq_obj]["Producto"] = nuevo_prod
+            with open(OBJETIVOS_FILE, "w", encoding="utf-8") as f:
+                json.dump(db_objetivos, f, indent=4, ensure_ascii=False)
+            st.success("¡Objetivos actualizados en archivo maestro!")
+            st.rerun()
 
 elif "3." in capa_activa:
     st.title("📱 Capa de Operario - Terminal Interactiva")
@@ -259,14 +287,22 @@ elif "3." in capa_activa:
     col_op1, col_op2 = st.columns(2)
     with col_op1:
         operario_nom = st.selectbox("Seleccione su Nombre:", ["VILLARROEL ENZO", "FRANCO MAXIMILIANO", "MOREIRA CRISTIAN"])
-        maq_op = st.selectbox("Puesto Físico:", list(st.session_state.db_objetivos.keys()))
+        maq_op = st.selectbox("Puesto Físico:", list(db_objetivos.keys()))
         hora_op = st.selectbox("Hora a declarar:", HORAS_TURNO)
     with col_op2:
         buenas_op = st.number_input("Piezas BUENAS:", min_value=0, value=50)
         ret_op = st.number_input("Piezas RETRABAJO:", min_value=0, value=0)
         obs_op = st.number_input("Piezas OBSERVADAS:", min_value=0, value=0)
     if st.button("💾 Enviar Bloque Hora a Hora", use_container_width=True):
-        st.success("¡Registro inyectado online!")
+        nueva_fila = {
+            "Hora": hora_op, "Maquina": maq_op, "Tipo": "Manual" if "Manual" in maq_op else "Automático",
+            "Operario": operario_nom, "Meta": db_objetivos[maq_op]["Meta_Hora"], "Buenas": buenas_op,
+            "Retrabajo": ret_op, "Observadas": obs_op, "Min_Parada": 0, "Falla": "Ninguna", "Es_Falla_Tecnica": False, "Validado": False
+        }
+        df_global = pd.concat([df_global, pd.DataFrame([nueva_fila])], ignore_index=True)
+        df_global.to_csv(HISTORIAL_FILE, index=False)
+        st.success("¡Registro inyectado en archivo de planta!")
+        st.rerun()
 
 elif "4." in capa_activa:
     st.title("👔 Capa de Supervisor - Validación y Auditoría")
@@ -310,17 +346,13 @@ elif "6." in capa_activa:
     st.markdown("<h2 style='color: #ffffff;'>📈 Analítica Avanzada e Históricos de Planta</h2>", unsafe_allow_html=True)
     c_btn1, c_btn2, c_btn3, c_btn4 = st.columns(4)
     with c_btn1: 
-        if st.button("⏱️ Tiempos de Parada", use_container_width=True):
-            st.session_state.sub_modulo_analisis = "Disponibilidad"
+        if st.button("⏱️ Tiempos de Parada", use_container_width=True): st.session_state.sub_modulo_analisis = "Disponibilidad"
     with c_btn2: 
-        if st.button("🛑 Distribución de Fallas", use_container_width=True):
-            st.session_state.sub_modulo_analisis = "Paradas"
+        if st.button("🛑 Distribución de Fallas", use_container_width=True): st.session_state.sub_modulo_analisis = "Paradas"
     with c_btn3: 
-        if st.button("⚙️ Frecuencias", use_container_width=True):
-            st.session_state.sub_modulo_analisis = "Causas"
+        if st.button("⚙️ Frecuencias", use_container_width=True): st.session_state.sub_modulo_analisis = "Causas"
     with c_btn4: 
-        if st.button("📦 Evolución de Producción", use_container_width=True):
-            st.session_state.sub_modulo_analisis = "Producción"
+        if st.button("📦 Evolución de Producción", use_container_width=True): st.session_state.sub_modulo_analisis = "Producción"
         
     st.markdown(f"### Análisis de Módulo: `{st.session_state.sub_modulo_analisis}`")
     
@@ -346,11 +378,10 @@ elif "7." in capa_activa:
     ahora = datetime.now()
     minutos_transcurridos_turno = (ahora.hour * 60 + ahora.minute) - (6 * 60)
     minutos_en_hora = minutos_transcurridos_turno % 60
-    if minutos_en_hora == 0: 
-        minutos_en_hora = 1
+    if minutos_en_hora <= 0: minutos_en_hora = 1
     
     cols = st.columns(3)
-    for i, (maq, d) in enumerate(st.session_state.db_objetivos.items()):
+    for i, (maq, d) in enumerate(db_objetivos.items()):
         df_maq = df_global[df_global["Maquina"] == maq]
         meta_hora_base = d.get("Meta_Hora", 60)
         meta_proporcional = round((meta_hora_base / 60) * minutos_en_hora)
@@ -365,7 +396,6 @@ elif "7." in capa_activa:
         clase_andon = "andon-marcha" if estado == "PRODUCIENDO" else ("andon-setup" if estado == "SETUP" else "andon-parada")
         badge_color = "badge-v" if estado == "PRODUCIENDO" else ("badge-a" if estado == "SETUP" else "badge-r")
         
-        # Bloque HTML sin indentación interna para evitar que Markdown rompa los divs
         html_code = f"""<div class="andon-card {clase_andon}">
 <div class="andon-header">
 <span>{maq}</span>
@@ -388,9 +418,7 @@ elif "7." in capa_activa:
 <div style="font-size:11px; color:#8b949e; margin-top:10px;">👤 OP: {operario}</div>
 <div style="font-size:11px; color:#8b949e;">🚨 ÚLTIMO EVENTO: {evento}</div>
 </div>"""
-        
-        with cols[i]:
-            st.markdown(html_code, unsafe_allow_html=True)
+        with cols[i]: st.markdown(html_code, unsafe_allow_html=True)
 
-# Inyección final de la lógica del carrusel de TV
+# Inyección final para el carrusel de TV
 st.markdown(JS_AUTOMATIZACION, unsafe_allow_html=True)
