@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import paho.mqtt.client as mqtt
 import os
+import time
 
 # 1. CONFIGURACIÓN DE PANTALLA
 st.set_page_config(page_title="SaaS OEE Industrial - Core Global", layout="wide")
@@ -12,10 +13,11 @@ st.set_page_config(page_title="SaaS OEE Industrial - Core Global", layout="wide"
 # =========================================================================
 @st.cache_resource
 def obtener_estado_global():
+    # Agregamos "Ultimo_TS" (Timestamp) para controlar el tiempo entre golpes
     return {
-        "DEMOWIDEM 1 (Inyectora)": {"Buenas": 0, "Meta": 60, "Estado": "PRODUCIENDO", "Producto": "Carcasa Plástica A", "Ultimo": "Esperando primer golpe MQTT...", "Retrabajos": 2, "Paradas_Min": 0},
-        "DEMOWIDEM 2 (Banco Manual)": {"Buenas": 15, "Meta": 40, "Estado": "SETUP", "Producto": "Ensamble Eléctrico B", "Ultimo": "Sin eventos recientes", "Retrabajos": 1, "Paradas_Min": 12},
-        "DEMOWIDEM 3 (Prensa)": {"Buenas": 42, "Meta": 80, "Estado": "PARADA", "Producto": "Soporte Metálico C", "Ultimo": "Mantenimiento en zona", "Retrabajos": 4, "Paradas_Min": 25}
+        "DEMOWIDEM 1 (Inyectora)": {"Buenas": 0, "Meta": 60, "Estado": "PRODUCIENDO", "Producto": "Carcasa Plástica A", "Ultimo": "Esperando primer golpe MQTT...", "Retrabajos": 2, "Paradas_Min": 0, "Ultimo_TS": 0.0},
+        "DEMOWIDEM 2 (Banco Manual)": {"Buenas": 15, "Meta": 40, "Estado": "SETUP", "Producto": "Ensamble Eléctrico B", "Ultimo": "Sin eventos recientes", "Retrabajos": 1, "Paradas_Min": 12, "Ultimo_TS": 0.0},
+        "DEMOWIDEM 3 (Prensa)": {"Buenas": 42, "Meta": 80, "Estado": "PARADA", "Producto": "Soporte Metálico C", "Ultimo": "Mantenimiento en zona", "Retrabajos": 4, "Paradas_Min": 25, "Ultimo_TS": 0.0}
     }
 
 estado_planta = obtener_estado_global()
@@ -27,7 +29,7 @@ if "historial_eventos" not in st.session_state:
     ]
 
 # =========================================================================
-# HILO DE ESCUCHA MQTT
+# HILO DE ESCUCHA MQTT CON FILTRO DE DEBOUNCE (ANTI-REBOTE)
 # =========================================================================
 @st.cache_resource
 def iniciar_escucha_hivemq():
@@ -42,16 +44,24 @@ def iniciar_escucha_hivemq():
         def on_message(client, userdata, msg):
             payload = msg.payload.decode("utf-8")
             ahora_str = datetime.now().strftime("%H:%M:%S")
+            ahora_ts = time.time() # Tiempo actual en segundos de alta precisión
             
+            # Filtro: 0.5 segundos de tolerancia mínima entre golpes legítimos
             if payload == "M1":
-                estado_planta["DEMOWIDEM 1 (Inyectora)"]["Buenas"] += 1
-                estado_planta["DEMOWIDEM 1 (Inyectora)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
+                if ahora_ts - estado_planta["DEMOWIDEM 1 (Inyectora)"]["Ultimo_TS"] > 0.5:
+                    estado_planta["DEMOWIDEM 1 (Inyectora)"]["Buenas"] += 1
+                    estado_planta["DEMOWIDEM 1 (Inyectora)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
+                    estado_planta["DEMOWIDEM 1 (Inyectora)"]["Ultimo_TS"] = ahora_ts
             elif payload == "M2":
-                estado_planta["DEMOWIDEM 2 (Banco Manual)"]["Buenas"] += 1
-                estado_planta["DEMOWIDEM 2 (Banco Manual)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
+                if ahora_ts - estado_planta["DEMOWIDEM 2 (Banco Manual)"]["Ultimo_TS"] > 0.5:
+                    estado_planta["DEMOWIDEM 2 (Banco Manual)"]["Buenas"] += 1
+                    estado_planta["DEMOWIDEM 2 (Banco Manual)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
+                    estado_planta["DEMOWIDEM 2 (Banco Manual)"]["Ultimo_TS"] = ahora_ts
             elif payload == "M3":
-                estado_planta["DEMOWIDEM 3 (Prensa)"]["Buenas"] += 1
-                estado_planta["DEMOWIDEM 3 (Prensa)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
+                if ahora_ts - estado_planta["DEMOWIDEM 3 (Prensa)"]["Ultimo_TS"] > 0.5:
+                    estado_planta["DEMOWIDEM 3 (Prensa)"]["Buenas"] += 1
+                    estado_planta["DEMOWIDEM 3 (Prensa)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
+                    estado_planta["DEMOWIDEM 3 (Prensa)"]["Ultimo_TS"] = ahora_ts
 
         cliente.on_message = on_message
         cliente.tls_set() 
@@ -109,7 +119,6 @@ else:
 @st.fragment(run_every=2)
 def renderizar_capa_activa(id_capa):
     
-    # CAPA 1: MONITOR DE MÁQUINA INDIVIDUAL
     if id_capa == 1:
         st.title("📊 Capa 1: Monitor de Celdas e Inyecciones")
         maq_sel = st.selectbox("Seleccione Máquina para inspección técnica:", list(estado_planta.keys()))
@@ -123,7 +132,6 @@ def renderizar_capa_activa(id_capa):
         st.progress(pct)
         st.info(f"Última trama de telemetría: {datos['Ultimo']}")
 
-    # CAPA 2: CONFIGURACIÓN DE INGENIERÍA
     elif id_capa == 2:
         st.title("🛠️ Capa 2: Panel de Ingeniería y Procesos")
         maq_sel = st.selectbox("Máquina a modificar:", list(estado_planta.keys()))
@@ -135,7 +143,6 @@ def renderizar_capa_activa(id_capa):
             estado_planta[maq_sel]["Producto"] = prod_nuevo
             st.success(f"Configuración actualizada para {maq_sel}.")
 
-    # CAPA 3: TERMINAL DE OPERARIO
     elif id_capa == 3:
         st.title("💻 Capa 3: Terminal de Entrada del Operario")
         maq_sel = st.selectbox("Su puesto asignado:", list(estado_planta.keys()))
@@ -152,7 +159,6 @@ def renderizar_capa_activa(id_capa):
                 })
             st.success("Evento registrado y enviado.")
 
-    # CAPA 4: VALIDACIÓN DE SUPERVISOR
     elif id_capa == 4:
         st.title("📋 Capa 4: Consola de Validación del Supervisor")
         df_eventos = pd.DataFrame(st.session_state.historial_eventos)
@@ -165,7 +171,6 @@ def renderizar_capa_activa(id_capa):
         else:
             st.info("No hay eventos pendientes de validación.")
 
-    # CAPA 5: VISTA GENERAL DIRECCIÓN
     elif id_capa == 5:
         st.title("🎯 Capa 5: Tablero Kaizen para Dirección General")
         col_dis, col_ren, col_cal = st.columns(3)
@@ -176,7 +181,6 @@ def renderizar_capa_activa(id_capa):
         for m, d in estado_planta.items():
             st.text(f"🔹 {m} | SKU: {d['Producto']} | Buenas: {d['Buenas']} pz | Paradas acumuladas: {d['Paradas_Min']} min")
 
-    # CAPA 6: ANÁLISIS DE DATOS (BI)
     elif id_capa == 6:
         st.title("📈 Capa 6: Módulo Business Intelligence & Pareto")
         data_grafico = {
@@ -187,7 +191,6 @@ def renderizar_capa_activa(id_capa):
         df_graf = pd.DataFrame(data_grafico).set_index("Máquina")
         st.bar_chart(df_graf)
 
-    # CAPA 7: ANDÓN DIGITAL EN TIEMPO REAL
     elif id_capa == 7:
         st.markdown("## 🚨 Monitor Andón de Planta (Tiempo Real - MQTT)")
         cols = st.columns(3)
