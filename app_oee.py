@@ -27,36 +27,21 @@ if "historial_eventos" not in st.session_state:
     ]
 
 # =========================================================================
-# HILO DE ESCUCHA MQTT CON DIAGNÓSTICO AVANZADO PARA LOGS
+# HILO DE ESCUCHA MQTT
 # =========================================================================
 @st.cache_resource
 def iniciar_escucha_hivemq():
-    print("[DIAGNÓSTICO MQTT] Iniciando proceso de conexión...")
     try:
         broker = st.secrets["MQTT_BROKER"]
         user = st.secrets["MQTT_USER"]
         password = st.secrets["MQTT_PASS"]
-        print(f"[DIAGNÓSTICO MQTT] Intentando conectar al Broker: {broker} con usuario: {user}")
         
         cliente = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         cliente.username_pw_set(user, password)
         
-        def on_connect(client, userdata, flags, reason_code, properties=None):
-            print(f"[DIAGNÓSTICO MQTT] RESPUESTA DEL BROKER - Código de conexión (reason_code): {reason_code}")
-            if reason_code == 0:
-                print("[DIAGNÓSTICO MQTT] ¡CONEXIÓN EXITOSA SINO DE FONDO!")
-                client.subscribe("planta/golpes")
-                print("[DIAGNÓSTICO MQTT] Suscripto con éxito al tópico: planta/golpes")
-            else:
-                print(f"[DIAGNÓSTICO MQTT] Error crítico. El broker rechazó la conexión. Código: {reason_code}")
-
-        def on_disconnect(client, userdata, flags, reason_code, properties=None):
-            print(f"[DIAGNÓSTICO MQTT] Se detectó una DESCONEXIÓN. Código: {reason_code}")
-
         def on_message(client, userdata, msg):
             payload = msg.payload.decode("utf-8")
             ahora_str = datetime.now().strftime("%H:%M:%S")
-            print(f"[DIAGNÓSTICO MQTT] ¡MENSAJE RECIBIDO EN VIVO! Tópico: {msg.topic} -> Carga: {payload}")
             
             if payload == "M1":
                 estado_planta["DEMOWIDEM 1 (Inyectora)"]["Buenas"] += 1
@@ -68,16 +53,13 @@ def iniciar_escucha_hivemq():
                 estado_planta["DEMOWIDEM 3 (Prensa)"]["Buenas"] += 1
                 estado_planta["DEMOWIDEM 3 (Prensa)"]["Ultimo"] = f"Golpe ESP32 recibido -> {ahora_str}"
 
-        cliente.on_connect = on_connect
-        cliente.on_disconnect = on_disconnect
         cliente.on_message = on_message
-        
-        cliente.tls_set() # Capa de seguridad obligatoria para HiveMQ Cloud (Puerto 8883)
+        cliente.tls_set() 
         cliente.connect(broker, 8883)
+        cliente.subscribe("planta/golpes")
         cliente.loop_start()
         return cliente
     except Exception as e:
-        print(f"[DIAGNÓSTICO MQTT] EXCEPCIÓN EN EL CÓDIGO PYTHON: {str(e)}")
         return None
 
 mqtt_client = iniciar_escucha_hivemq()
@@ -102,7 +84,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================================
-# NAVEGADOR E INTERFAZ DE CAPAS
+# INTERFAZ Y MENÚ LATERAL
 # =========================================================================
 st.sidebar.title("🎛️ Ecosistema SaaS OEE")
 capas = {
@@ -121,119 +103,122 @@ if mqtt_client is None:
 else:
     st.sidebar.success("⚡ Conexión MQTT en segundo plano: ACTIVA")
 
-# --- DESARROLLO DE CADA CAPA ---
-
-if capas[capa_seleccionada] == 1:
-    st.title("📊 Capa 1: Monitor de Celdas e Inyecciones")
-    maq_sel = st.selectbox("Seleccione Máquina para inspección técnica:", list(estado_planta.keys()))
-    datos = estado_planta[maq_sel]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Piezas Fabricadas", f"{datos['Buenas']} pz")
-    c2.metric("Meta del Turno", f"{datos['Meta']} pz")
-    pct = min(1.0, datos['Buenas'] / datos['Meta']) if datos['Meta'] > 0 else 0
-    c3.metric("Progreso de Eficiencia", f"{round(pct*100, 1)}%")
-    st.progress(pct)
-    st.info(f"Última trama de telemetría: {datos['Ultimo']}")
-
-elif capas[capa_seleccionada] == 2:
-    st.title("🛠️ Capa 2: Panel de Ingeniería y Procesos")
-    maq_sel = st.selectbox("Máquina a modificar:", list(estado_planta.keys()))
-    meta_nueva = st.number_input("Establecer nueva Meta Horaria:", min_value=1, value=int(estado_planta[maq_sel]["Meta"]))
-    prod_nuevo = st.text_input("Producto / SKU actual:", value=estado_planta[maq_sel]["Producto"])
-    if st.button("Aplicar cambios a la Planta"):
-        estado_planta[maq_sel]["Meta"] = meta_nueva
-        estado_planta[maq_sel]["Producto"] = prod_nuevo
-        st.success(f"Configuración actualizada para {maq_sel}.")
-
-elif capas[capa_seleccionada] == 3:
-    st.title("💻 Capa 3: Terminal de Entrada del Operario")
-    maq_sel = st.selectbox("Su puesto asignado:", list(estado_planta.keys()))
-    estado_nuevo = st.selectbox("Cambiar Estado Operativo:", ["PRODUCIENDO", "SETUP", "PARADA"])
-    tipo_falla = st.selectbox("Declarar causa de detención:", ["Ninguna", "Falta de Material", "Rotura Mecánica", "Ajuste de Parámetros"])
-    min_parada = st.number_input("Minutos de parada estimados:", min_value=0, value=0)
-    if st.button("Registrar Novedad en Turno"):
-        estado_planta[maq_sel]["Estado"] = estado_nuevo
-        if min_parada > 0:
-            estado_planta[maq_sel]["Paradas_Min"] += min_parada
-            st.session_state.historial_eventos.append({
-                "Hora": datetime.now().strftime("%H:%M"), "Maquina": maq_sel, "Tipo": tipo_falla, "Duracion": min_parada, "Validado": False
-            })
-        st.success("Evento registrado.")
-
-elif capas[capa_seleccionada] == 4:
-    st.title("📋 Capa 4: Consola de Validación del Supervisor")
-    df_eventos = pd.DataFrame(st.session_state.historial_eventos)
-    if not df_eventos.empty:
-        st.dataframe(df_eventos)
-        idx_val = st.number_input("Ingrese índice de fila a validar:", min_value=0, max_value=len(df_eventos)-1, step=1)
-        if st.button("Aprobar e imputar al OEE definitivo"):
-            st.session_state.historial_eventos[idx_val]["Validado"] = True
-            st.success(f"Fila {idx_val} validada.")
-    else:
-        st.info("No hay eventos pendientes de validación.")
-
-elif capas[capa_seleccionada] == 5:
-    st.title("🎯 Capa 5: Tablero Kaizen para Dirección General")
-    col_dis, col_ren, col_cal = st.columns(3)
-    col_dis.metric("DISPONIBILIDAD TOTAL", "88.4%")
-    col_ren.metric("RENDIMIENTO GLOBAL", "91.2%")
-    col_cal.metric("CALIDAD DE PROCESO", "98.7%")
-    st.markdown("---")
-    for m, d in estado_planta.items():
-        st.text(f"🔹 {m} | SKU: {d['Producto']} | Buenas: {d['Buenas']} pz | Paradas: {d['Paradas_Min']} min")
-
-elif capas[capa_seleccionada] == 6:
-    st.title("📈 Capa 6: Módulo Business Intelligence & Pareto")
-    data_grafico = {
-        "Máquina": list(estado_planta.keys()),
-        "Minutos de Parada Acumulados": [d["Paradas_Min"] for d in estado_planta.values()],
-        "Piezas de Retrabajo / Scrap": [d["Retrabajos"] for d in estado_planta.values()]
-    }
-    df_graf = pd.DataFrame(data_grafico).set_index("Máquina")
-    st.bar_chart(df_graf)
-
-elif capas[capa_seleccionada] == 7:
-    st.markdown("## 🚨 Monitor Andón de Planta (Tiempo Real - MQTT)")
-    cols = st.columns(3)
-    for i, (maq, datos) in enumerate(estado_planta.items()):
-        estado = datos["Estado"]
-        clase_andon = "andon-marcha" if estado == "PRODUCIENDO" else ("andon-setup" if estado == "SETUP" else "andon-parada")
-        badge_color = "badge-v" if estado == "PRODUCIENDO" else ("badge-a" if estado == "SETUP" else "badge-r")
+# =========================================================================
+# NÚCLEO DINÁMICO: CON AUTO-REFRESCO CADA 2 SEGUNDOS
+# =========================================================================
+@st.fragment(run_every=2)
+def renderizar_capa_activa(id_capa):
+    
+    # CAPA 1: MONITOR DE MÁQUINA INDIVIDUAL
+    if id_capa == 1:
+        st.title("📊 Capa 1: Monitor de Celdas e Inyecciones")
+        maq_sel = st.selectbox("Seleccione Máquina para inspección técnica:", list(estado_planta.keys()))
+        datos = estado_planta[maq_sel]
         
-        html_code = f"""
-        <div class="andon-card {clase_andon}">
-            <div class="andon-header">
-                <span>{maq}</span>
-                <span class="wiidem-badge {badge_color}">{estado}</span>
-            </div>
-            <div style="margin-top:12px; font-size:13px; color:#8b949e;">PRODUCTO ACTIVO: <b>{datos['Producto']}</b></div>
-            <div class="andon-meta-box">
-                <table style="width:100%; color:#c9d1d9; border-collapse:collapse;">
-                    <tr><td><b>ESTADO DE PROCESO:</b></td><td style="text-align:right; color:#00f2fe;"><b>Sincronizado</b></td></tr>
-                </table>
-            </div>
-            <div class="andon-meta-box">
-                <table style="width:100%; font-size:12px; border-collapse:collapse;">
-                    <tr><td>META ESTÁNDAR:</td><td style="text-align:right;"><b>{datos['Meta']} pz</b></td></tr>
-                    <tr><td>REAL LOGRADO:</td><td style="text-align:right; color:#00f2fe; font-size:15px;"><b>{datos['Buenas']} pz</b></td></tr>
-                </table>
-            </div>
-            <div style="font-size:11px; color:#ffaa00; margin-top:10px;">📡 Telemetría: {datos['Ultimo']}</div>
-        </div>
-        """
-        with cols[i]:
-            st.markdown(html_code, unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Piezas Fabricadas", f"{datos['Buenas']} pz")
+        c2.metric("Meta del Turno", f"{datos['Meta']} pz")
+        pct = min(1.0, datos['Buenas'] / datos['Meta']) if datos['Meta'] > 0 else 0
+        c3.metric("Progreso de Eficiencia", f"{round(pct*100, 1)}%")
+        st.progress(pct)
+        st.info(f"Última trama de telemetría: {datos['Ultimo']}")
 
-# Refresco automático
-JS_REFRESCO = """
-<script>
-    if (!window.andonRefreshSet) {
-        window.andonRefreshSet = true;
-        setInterval(function() {
-            var reloadButton = window.parent.document.querySelector('button[title="Refresh"]');
-            if (reloadButton) { reloadButton.click(); }
-        }, 2000);
-    }
-</script>
-"""
-st.markdown(JS_REFRESCO, unsafe_allow_html=True)
+    # CAPA 2: CONFIGURACIÓN DE INGENIERÍA
+    elif id_capa == 2:
+        st.title("🛠️ Capa 2: Panel de Ingeniería y Procesos")
+        maq_sel = st.selectbox("Máquina a modificar:", list(estado_planta.keys()))
+        meta_nueva = st.number_input("Establecer nueva Meta Horaria:", min_value=1, value=int(estado_planta[maq_sel]["Meta"]))
+        prod_nuevo = st.text_input("Producto / SKU en producción actual:", value=estado_planta[maq_sel]["Producto"])
+        
+        if st.button("Aplicar cambios a la Planta"):
+            estado_planta[maq_sel]["Meta"] = meta_nueva
+            estado_planta[maq_sel]["Producto"] = prod_nuevo
+            st.success(f"Configuración actualizada para {maq_sel}.")
+
+    # CAPA 3: TERMINAL DE OPERARIO
+    elif id_capa == 3:
+        st.title("💻 Capa 3: Terminal de Entrada del Operario")
+        maq_sel = st.selectbox("Su puesto asignado:", list(estado_planta.keys()))
+        estado_nuevo = st.selectbox("Cambiar Estado Operativo:", ["PRODUCIENDO", "SETUP", "PARADA"])
+        tipo_falla = st.selectbox("Declarar causa de detención:", ["Ninguna", "Falta de Material", "Rotura Mecánica", "Ajuste de Parámetros"])
+        min_parada = st.number_input("Minutos de parada estimados:", min_value=0, value=0)
+        
+        if st.button("Registrar Novedad en Turno"):
+            estado_planta[maq_sel]["Estado"] = estado_nuevo
+            if min_parada > 0:
+                estado_planta[maq_sel]["Paradas_Min"] += min_parada
+                st.session_state.historial_eventos.append({
+                    "Hora": datetime.now().strftime("%H:%M"), "Maquina": maq_sel, "Tipo": tipo_falla, "Duracion": min_parada, "Validado": False
+                })
+            st.success("Evento registrado y enviado.")
+
+    # CAPA 4: VALIDACIÓN DE SUPERVISOR
+    elif id_capa == 4:
+        st.title("📋 Capa 4: Consola de Validación del Supervisor")
+        df_eventos = pd.DataFrame(st.session_state.historial_eventos)
+        if not df_eventos.empty:
+            st.dataframe(df_eventos)
+            idx_val = st.number_input("Ingrese índice de fila a validar:", min_value=0, max_value=len(df_eventos)-1, step=1)
+            if st.button("Aprobar e imputar al OEE definitivo"):
+                st.session_state.historial_eventos[idx_val]["Validado"] = True
+                st.success(f"Fila {idx_val} validada.")
+        else:
+            st.info("No hay eventos pendientes de validación.")
+
+    # CAPA 5: VISTA GENERAL DIRECCIÓN
+    elif id_capa == 5:
+        st.title("🎯 Capa 5: Tablero Kaizen para Dirección General")
+        col_dis, col_ren, col_cal = st.columns(3)
+        col_dis.metric("DISPONIBILIDAD TOTAL", "88.4%")
+        col_ren.metric("RENDIMIENTO GLOBAL", "91.2%")
+        col_cal.metric("CALIDAD DE PROCESO", "98.7%")
+        st.markdown("---")
+        for m, d in estado_planta.items():
+            st.text(f"🔹 {m} | SKU: {d['Producto']} | Buenas: {d['Buenas']} pz | Paradas acumuladas: {d['Paradas_Min']} min")
+
+    # CAPA 6: ANÁLISIS DE DATOS (BI)
+    elif id_capa == 6:
+        st.title("📈 Capa 6: Módulo Business Intelligence & Pareto")
+        data_grafico = {
+            "Máquina": list(estado_planta.keys()),
+            "Minutos de Parada Acumulados": [d["Paradas_Min"] for d in estado_planta.values()],
+            "Piezas de Retrabajo / Scrap": [d["Retrabajos"] for d in estado_planta.values()]
+        }
+        df_graf = pd.DataFrame(data_grafico).set_index("Máquina")
+        st.bar_chart(df_graf)
+
+    # CAPA 7: ANDÓN DIGITAL EN TIEMPO REAL
+    elif id_capa == 7:
+        st.markdown("## 🚨 Monitor Andón de Planta (Tiempo Real - MQTT)")
+        cols = st.columns(3)
+        for i, (maq, datos) in enumerate(estado_planta.items()):
+            estado = datos["Estado"]
+            clase_andon = "andon-marcha" if estado == "PRODUCIENDO" else ("andon-setup" if estado == "SETUP" else "andon-parada")
+            badge_color = "badge-v" if estado == "PRODUCIENDO" else ("badge-a" if estado == "SETUP" else "badge-r")
+            
+            html_code = f"""
+            <div class="andon-card {clase_andon}">
+                <div class="andon-header">
+                    <span>{maq}</span>
+                    <span class="wiidem-badge {badge_color}">{estado}</span>
+                </div>
+                <div style="margin-top:12px; font-size:13px; color:#8b949e;">PRODUCTO ACTIVO: <b>{datos['Producto']}</b></div>
+                <div class="andon-meta-box">
+                    <table style="width:100%; color:#c9d1d9; border-collapse:collapse;">
+                        <tr><td><b>ESTADO DE PROCESO:</b></td><td style="text-align:right; color:#00f2fe;"><b>Sincronizado</b></td></tr>
+                    </table>
+                </div>
+                <div class="andon-meta-box">
+                    <table style="width:100%; font-size:12px; border-collapse:collapse;">
+                        <tr><td>META ESTÁNDAR:</td><td style="text-align:right;"><b>{datos['Meta']} pz</b></td></tr>
+                        <tr><td>REAL LOGRADO:</td><td style="text-align:right; color:#00f2fe; font-size:15px;"><b>{datos['Buenas']} pz</b></td></tr>
+                    </table>
+                </div>
+                <div style="font-size:11px; color:#ffaa00; margin-top:10px;">📡 Telemetría: {datos['Ultimo']}</div>
+            </div>
+            """
+            with cols[i]:
+                st.markdown(html_code, unsafe_allow_html=True)
+
+# Ejecutamos el fragmento pasando la capa elegida
+renderizar_capa_activa(capas[capa_seleccionada])
