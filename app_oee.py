@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import os
 
-# 1. CONFIGURACIÓN DE PANTALLA PRINCIPAL (Debe ser siempre la primera directiva)
+# 1. CONFIGURACIÓN DE PANTALLA PRINCIPAL
 st.set_page_config(page_title="SaaS OEE - Core Global de Planta", layout="wide")
 
 # Credenciales seguras desde los Secrets
@@ -103,7 +103,6 @@ if not st.session_state.autenticado:
     st.warning("🔒 Por favor introduzca sus credenciales corporativas en el menú lateral.")
     st.info("💡 Credenciales Demo: Usuario: `director_general` | Clave: `456`")
 
-# Si no está validado, frena acá de forma segura
 if not st.session_state.autenticado:
     st.stop()
 
@@ -141,7 +140,7 @@ if "db_historial_planta" not in st.session_state:
     ])
 
 if "sub_modulo_analisis" not in st.session_state:
-    st.session_state.sub_modulo_analisis = "Disponibilidad"
+    st.session_state.sub_modulo_analisis = "Producción"
 
 # =========================================================================
 # 4. RECEPTOR DE GOLPES IOT URL
@@ -150,17 +149,14 @@ query_params = st.query_params
 
 if "evento" in query_params and query_params["evento"] == "golpe":
     maquina_param = query_params.get("maquina", "M1")
-    
     if maquina_param == "M1":
         maquina_nombre = "DEMOWIDEM 1 (Inyectora)"
         filas_maquina = st.session_state.db_historial_planta["Maquina"] == maquina_nombre
-        
         if filas_maquina.any():
             ultimo_idx = st.session_state.db_historial_planta[filas_maquina].index[-1]
             st.session_state.db_historial_planta.at[ultimo_idx, "Buenas"] += 1
             st.session_state.db_objetivos[maquina_nombre]["Estado_TR"] = "PRODUCIENDO"
             st.session_state.db_objetivos[maquina_nombre]["Ultimo_Evento"] = f"Golpe IoT recibido ({datetime.now().strftime('%H:%M:%S')})"
-        
         st.query_params.clear()
         st.rerun()
 
@@ -314,27 +310,44 @@ elif "6." in capa_activa:
     st.markdown("<h2 style='color: #ffffff;'>📈 Analítica Avanzada e Históricos de Planta</h2>", unsafe_allow_html=True)
     c_btn1, c_btn2, c_btn3, c_btn4 = st.columns(4)
     with c_btn1: 
-        if st.button("⏱️ Disponibilidad"):
+        if st.button("⏱️ Tiempos de Parada", use_container_width=True):
             st.session_state.sub_modulo_analisis = "Disponibilidad"
     with c_btn2: 
-        if st.button("🛑 Paradas"):
+        if st.button("🛑 Distribución de Fallas", use_container_width=True):
             st.session_state.sub_modulo_analisis = "Paradas"
     with c_btn3: 
-        if st.button("⚙️ Causas"):
+        if st.button("⚙️ Frecuencias", use_container_width=True):
             st.session_state.sub_modulo_analisis = "Causas"
     with c_btn4: 
-        if st.button("📦 Producción"):
+        if st.button("📦 Evolución de Producción", use_container_width=True):
             st.session_state.sub_modulo_analisis = "Producción"
         
-    fig_prod = px.bar(df_global, x="Hora", y=["Buenas", "Retrabajo", "Observadas"], barmode="group", title="Producción")
-    st.plotly_chart(fig_prod, use_container_width=True)
+    st.markdown(f"### Análisis de Módulo: `{st.session_state.sub_modulo_analisis}`")
+    
+    if st.session_state.sub_modulo_analisis == "Disponibilidad":
+        fig_disp = px.bar(df_global, x="Hora", y="Min_Parada", color="Maquina", title="Minutos Totales de Parada por Hora")
+        st.plotly_chart(fig_disp, use_container_width=True)
+    elif st.session_state.sub_modulo_analisis == "Paradas":
+        df_paradas = df_global[df_global["Min_Parada"] > 0]
+        if not df_paradas.empty:
+            fig_paradas = px.pie(df_paradas, values="Min_Parada", names="Falla", title="Paretos de Pérdidas de Disponibilidad")
+            st.plotly_chart(fig_paradas, use_container_width=True)
+        else:
+            st.info("Sin paradas registradas en el turno activo.")
+    elif st.session_state.sub_modulo_analisis == "Causas":
+        fig_causas = px.histogram(df_global, x="Falla", color="Maquina", title="Historial y Recurrencia de Alarmas")
+        st.plotly_chart(fig_causas, use_container_width=True)
+    else:
+        fig_prod = px.bar(df_global, x="Hora", y=["Buenas", "Retrabajo", "Observadas"], barmode="group", title="Cumplimiento de Volumen")
+        st.plotly_chart(fig_prod, use_container_width=True)
 
 elif "7." in capa_activa:
     st.markdown("## 🚨 Monitor Andón de Planta (Tiempo Real)")
     ahora = datetime.now()
     minutos_transcurridos_turno = (ahora.hour * 60 + ahora.minute) - (6 * 60)
     minutos_en_hora = minutos_transcurridos_turno % 60
-    if minutos_en_hora == 0: minutos_en_hora = 1
+    if minutos_en_hora == 0: 
+        minutos_en_hora = 1
     
     cols = st.columns(3)
     for i, (maq, d) in enumerate(st.session_state.db_objetivos.items()):
@@ -352,33 +365,32 @@ elif "7." in capa_activa:
         clase_andon = "andon-marcha" if estado == "PRODUCIENDO" else ("andon-setup" if estado == "SETUP" else "andon-parada")
         badge_color = "badge-v" if estado == "PRODUCIENDO" else ("badge-a" if estado == "SETUP" else "badge-r")
         
+        # Bloque HTML sin indentación interna para evitar que Markdown rompa los divs
+        html_code = f"""<div class="andon-card {clase_andon}">
+<div class="andon-header">
+<span>{maq}</span>
+<span class="wiidem-badge {badge_color}">{estado}</span>
+</div>
+<div style="margin-top:15px; font-size:14px; color:#8b949e;">PRODUCTO ACTIVO:</div>
+<div style="font-size:18px; font-weight:bold; color:#ffffff; font-family:sans-serif;">{d.get('Producto','-')}</div>
+<div class="andon-meta-box">
+<table style="width:100%; color:#c9d1d9; border-collapse:collapse;">
+<tr><td><b>EFFICIENCY:</b></td><td style="text-align:right; color:#00cc66; font-size:18px;"><b>{eficiencia_real}%</b></td></tr>
+<tr><td><b>OEE ESTIMADO:</b></td><td style="text-align:right; color:#00f2fe;"><b>{oee}%</b></td></tr>
+</table>
+</div>
+<div class="andon-meta-box">
+<table style="width:100%; font-size:12px; border-collapse:collapse;">
+<tr><td>META PARCIAL ({minutos_en_hora} min):</td><td style="text-align:right;"><b>{meta_proporcional} pz</b></td></tr>
+<tr><td>REAL LOGRADO:</td><td style="text-align:right; color:#00f2fe;"><b>{total_buenas} pz</b></td></tr>
+</table>
+</div>
+<div style="font-size:11px; color:#8b949e; margin-top:10px;">👤 OP: {operario}</div>
+<div style="font-size:11px; color:#8b949e;">🚨 ÚLTIMO EVENTO: {evento}</div>
+</div>"""
+        
         with cols[i]:
-            st.markdown(f"""
-            <div class="andon-card {clase_andon}">
-                <div class="andon-header">
-                    <span>{maq}</span>
-                    <span class="wiidem-badge {badge_color}">{estado}</span>
-                </div>
-                <div style="margin-top:15px; font-size:14px; color:#8b949e;">PRODUCTO ACTIVO:</div>
-                <div style="font-size:18px; font-weight:bold; color:#ffffff; font-family:sans-serif;">{d.get('Producto','-')}</div>
-                
-                <div class="andon-meta-box">
-                    <table style="width:100%; color:#c9d1d9;">
-                        <tr><td><b>EFFICIENCY:</b></td><td style="text-align:right; color:#00cc66; font-size:18px;"><b>{eficiencia_real}%</b></td></tr>
-                        <tr><td><b>OEE ESTIMADO:</b></td><td style="text-align:right; color:#00f2fe;"><b>{oee}%</b></td></tr>
-                    </table>
-                </div>
-                
-                <div class="andon-meta-box">
-                    <table style="width:100%; font-size:12px;">
-                        <tr><td>META PARCIAL ({minutos_en_hora} min):</td><td style="text-align:right;"><b>{meta_proporcional} pz</b></td></tr>
-                        <tr><td>REAL LOGRADO:</td><td style="text-align:right; color:#00f2fe;"><b>{total_buenas} pz</b></td></tr>
-                    </table>
-                </div>
-                <div style="font-size:11px; color:#8b949e; margin-top:10px;">👤 OP: {operario}</div>
-                <div style="font-size:11px; color:#8b949e;">🚨 ÚLTIMO EVENTO: {evento}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(html_code, unsafe_allow_html=True)
 
 # Inyección final de la lógica del carrusel de TV
 st.markdown(JS_AUTOMATIZACION, unsafe_allow_html=True)
