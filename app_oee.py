@@ -5,15 +5,15 @@ import plotly.graph_objects as go
 from datetime import datetime
 import os
 
-# 1. CONFIGURACIÓN DE PANTALLA (Debe ser la primera directiva de Streamlit)
+# 1. CONFIGURACIÓN DE PANTALLA PRINCIPAL (Siempre primero)
 st.set_page_config(page_title="SaaS OEE - Core Global de Planta", layout="wide")
 
-# Definimos las claves para conectar a la nube
+# Credenciales seguras
 mqtt_user = st.secrets["MQTT_USER"]
 mqtt_pass = st.secrets["MQTT_PASS"]
 
 # =========================================================================
-# VARIABLES DE INYECCIÓN (Aisladas para evitar errores de comillas triples)
+# BLOQUES DE INYECCIÓN WEB (Separados para evitar errores de comillas triples)
 # =========================================================================
 
 ESTILOS_CSS = """
@@ -76,7 +76,7 @@ JS_AUTOMATIZACION = """
 </script>
 """
 
-# Aplicamos los estilos visuales originales
+# Aplicamos los estilos visuales
 st.markdown(ESTILOS_CSS, unsafe_allow_html=True)
 
 # =========================================================================
@@ -108,7 +108,7 @@ if "sub_modulo_analisis" not in st.session_state:
     st.session_state.sub_modulo_analisis = "Disponibilidad"
 
 # =========================================================================
-# RECEPTOR DE GOLPES IOT INTERNADO (ACTUALIZACIÓN DIRECTA)
+# RECEPTOR DE GOLPES IOT URL
 # =========================================================================
 query_params = st.query_params
 
@@ -129,7 +129,7 @@ if "evento" in query_params and query_params["evento"] == "golpe":
         st.rerun()
 
 # =========================================================================
-# 3. CONTROL DE SESIÓN Y PARED DE LOGUEO
+# 3. CONTROL DE SESIÓN Y SEGURIDAD
 # =========================================================================
 st.sidebar.title("🔐 Autenticación SaaS")
 
@@ -197,7 +197,6 @@ if capa_codigo not in st.session_state.permisos_usuario:
     <div style='background-color:#2d1215; padding:30px; border-radius:8px; border:1px solid #ff4b4b; text-align:center;'>
         <h2 style='color:#ff4b4b; margin-top:0;'>🔒 Módulo No Contratado</h2>
         <p style='font-size:16px; color:#c9d1d9;'>Su cuenta actual no posee la licencia activa para utilizar la <b>{capa_activa}</b>.</p>
-        <br>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
@@ -209,26 +208,18 @@ tiempo_reparaciones = df_tecnico["Min_Parada"].sum()
 mttr = round(tiempo_reparaciones / total_fallas, 2) if total_fallas > 0 else 0.0
 mtbf = round((tiempo_programado - tiempo_reparaciones) / total_fallas, 2) if total_fallas > 0 else tiempo_programado
 
-# Función auxiliar para los gauges originales
 def draw_scada_gauge(titulo_gauge, value):
     color_semaforo = "#00cc66" if value >= 85.0 else ("#ffaa00" if value >= 70.0 else "#ff4b4b")
     fig = go.Figure(go.Indicator(
-        mode = "gauge+number", 
-        value = value, 
-        number = {'suffix': "%", 'font': {'size': 24}},
+        mode = "gauge+number", value = value, number = {'suffix': "%", 'font': {'size': 24}},
         title = {'text': titulo_gauge, 'font': {'size': 14, 'color': '#8b949e'}},
-        gauge = {
-            'axis': {'range': [0, 100], 'tickcolor': '#30363d'}, 
-            'bar': {'color': color_semaforo}, 
-            'bgcolor': '#161b22', 
-            'borderwidth': 0
-        }
+        gauge = {'axis': {'range': [0, 100], 'tickcolor': '#30363d'}, 'bar': {'color': color_semaforo}, 'bgcolor': '#161b22', 'borderwidth': 0}
     ))
     fig.update_layout(height=130, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor='rgba(0,0,0,0)')
     return fig
 
 # =========================================================================
-# 5. EJECUCIÓN MODULAR DE CAPAS (DISEÑO ORIGINAL RESTABLECIDO)
+# 5. EJECUCIÓN MODULAR DE CAPAS (DISEÑO ORIGINAL CORREGIDO)
 # =========================================================================
 
 if "1." in capa_activa:
@@ -329,11 +320,21 @@ elif "5." in capa_activa:
 
 elif "6." in capa_activa:
     st.markdown("<h2 style='color: #ffffff;'>📈 Analítica Avanzada e Históricos de Planta</h2>", unsafe_allow_html=True)
+    
+    # CORRECCIÓN DE SINTAXIS CRÍTICA EN LOS BOTONES
     c_btn1, c_btn2, c_btn3, c_btn4 = st.columns(4)
-    with c_btn1: if st.button("⏱️ Disponibilidad"): st.session_state.sub_modulo_analisis = "Disponibilidad"
-    with c_btn2: if st.button("🛑 Paradas"): st.session_state.sub_modulo_analisis = "Paradas"
-    with c_btn3: if st.button("⚙️ Causas"): st.session_state.sub_modulo_analisis = "Causas"
-    with c_btn4: if st.button("📦 Producción"): st.session_state.sub_modulo_analisis = "Producción"
+    with c_btn1: 
+        if st.button("⏱️ Disponibilidad"): 
+            st.session_state.sub_modulo_analisis = "Disponibilidad"
+    with c_btn2: 
+        if st.button("🛑 Paradas"): 
+            st.session_state.sub_modulo_analisis = "Paradas"
+    with c_btn3: 
+        if st.button("⚙️ Causas"): 
+            st.session_state.sub_modulo_analisis = "Causas"
+    with c_btn4: 
+        if st.button("📦 Producción"): 
+            st.session_state.sub_modulo_analisis = "Producción"
         
     fig_prod = px.bar(df_global, x="Hora", y=["Buenas", "Retrabajo", "Observadas"], barmode="group", title="Producción")
     st.plotly_chart(fig_prod, use_container_width=True)
@@ -358,12 +359,10 @@ elif "7." in capa_activa:
         operario = df_maq["Operario"].iloc[-1] if not df_maq.empty else "N/A"
         evento = d.get("Ultimo_Evento", "Ninguno")
         
-        # Mapeo de clases CSS originales según estado real
         clase_andon = "andon-marcha" if estado == "PRODUCIENDO" else ("andon-setup" if estado == "SETUP" else "andon-parada")
         badge_color = "badge-v" if estado == "PRODUCIENDO" else ("badge-a" if estado == "SETUP" else "badge-r")
         
         with cols[i]:
-            # RENDERIZADO CON LA ESTÉTICA EXACTA SOLICITADA
             st.markdown(f"""
             <div class="andon-card {clase_andon}">
                 <div class="andon-header">
@@ -391,5 +390,5 @@ elif "7." in capa_activa:
             </div>
             """, unsafe_allow_html=True)
 
-# Inyección segura de la lógica automática de TV al final de todo
+# Inyección segura de la lógica automática de TV al final
 st.markdown(JS_AUTOMATIZACION, unsafe_allow_html=True)
