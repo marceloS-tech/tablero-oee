@@ -70,7 +70,7 @@ JS_AUTOMATIZACION = """
 st.markdown(ESTILOS_CSS, unsafe_allow_html=True)
 
 # =========================================================================
-# 2. CONTROL DE SESIÓN Y PARED DE LOGUEO (PUESTO ARRIBA DE TODO)
+# 2. CONTROL DE SESIÓN Y PARED DE LOGUEO (CORREGIDO)
 # =========================================================================
 st.sidebar.title("🔐 Autenticación SaaS")
 
@@ -102,9 +102,12 @@ if not st.session_state.autenticado:
             
     st.warning("🔒 Por favor introduzca sus credenciales corporativas en el menú lateral.")
     st.info("💡 Credenciales Demo: Usuario: `director_general` | Clave: `456`")
-    st.stop()  # Detiene la ejecución acá si no se logueó, evitando bucles en blanco
 
-# Si el usuario llegó acá, está correctamente autenticado
+# Si aún no está autenticado tras evaluar el botón, frenamos el renderizado de las capas de fondo
+if not st.session_state.autenticado:
+    st.stop()
+
+# Menú de usuario autenticado
 st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.usuario_conectado}`")
 if st.sidebar.button("🔴 Cerrar Sesión", use_container_width=True):
     st.session_state.autenticado = False
@@ -169,209 +172,3 @@ capa_mapeada = {
     "1. 🖥️ Capa de Puesto (Pie de Máquina)": "Capa 1",
     "2. 🎯 Capa de Objetivos (Ingeniería/PCP)": "Capa 2",
     "3. 📱 Capa de Operario (Tablet)": "Capa 3",
-    "4. 👔 Capa de Supervisor (Validación)": "Capa 4",
-    "5. 📊 Capa de Visión General (Dirección)": "Capa 5",
-    "6. 📈 Capa de Análisis de Datos (BI)": "Capa 6",
-    "7. 🚨 Capa de Andón Digital (Wiidem Style)": "Capa 7"
-}
-
-capa_activa = st.sidebar.radio("Seleccione el nivel de pantalla:", list(capa_mapeada.keys()))
-st.sidebar.markdown("---")
-
-capa_codigo = capa_mapeada[capa_activa]
-df_global = st.session_state.db_historial_planta
-
-if capa_codigo not in st.session_state.permisos_usuario:
-    st.markdown(f"""
-    <div style='background-color:#2d1215; padding:30px; border-radius:8px; border:1px solid #ff4b4b; text-align:center;'>
-        <h2 style='color:#ff4b4b; margin-top:0;'>🔒 Módulo No Contratado</h2>
-        <p style='font-size:16px; color:#c9d1d9;'>Su cuenta actual no posee la licencia activa para utilizar la <b>{capa_activa}</b>.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop()
-
-tiempo_programado = len(df_global) * 60
-df_tecnico = df_global[df_global["Es_Falla_Tecnica"] == True]
-total_fallas = len(df_tecnico)
-tiempo_reparaciones = df_tecnico["Min_Parada"].sum()
-mttr = round(tiempo_reparaciones / total_fallas, 2) if total_fallas > 0 else 0.0
-mtbf = round((tiempo_programado - tiempo_reparaciones) / total_fallas, 2) if total_fallas > 0 else tiempo_programado
-
-def draw_scada_gauge(titulo_gauge, value):
-    color_semaforo = "#00cc66" if value >= 85.0 else ("#ffaa00" if value >= 70.0 else "#ff4b4b")
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number", value = value, number = {'suffix': "%", 'font': {'size': 24}},
-        title = {'text': titulo_gauge, 'font': {'size': 14, 'color': '#8b949e'}},
-        gauge = {'axis': {'range': [0, 100], 'tickcolor': '#30363d'}, 'bar': {'color': color_semaforo}, 'bgcolor': '#161b22', 'borderwidth': 0}
-    ))
-    fig.update_layout(height=130, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor='rgba(0,0,0,0)')
-    return fig
-
-# =========================================================================
-# 6. RENDERIZADO DE LAS CAPAS VISUALES ORIGINALES
-# =========================================================================
-
-if "1." in capa_activa:
-    st.title("🖥️ Capa de Puesto - Monitor de Máquina")
-    maq_puesto = st.selectbox("Seleccione el Puesto a mostrar en este Monitor:", list(st.session_state.db_objetivos.keys()))
-    st.markdown(f"### 📍 Celda Activa: {maq_puesto} | **Producto:** `{st.session_state.db_objetivos[maq_puesto]['Producto']}`")
-    st.markdown("---")
-    
-    df_puesto = df_global[df_global["Maquina"] == maq_puesto].sort_values(by="Hora")
-    df_m1 = df_puesto.copy()
-    df_m1["Utilización (Min)"] = 60 - df_m1["Min_Parada"]
-    df_m1["Rendimiento (%)"] = round((df_m1["Buenas"] / df_m1["Meta"]) * 100, 1) if len(df_m1) > 0 else 0
-    df_m1["Estado"] = df_m1["Min_Parada"].apply(lambda x: "🔴 Parada" if x > 15 else ("🟡 Desvío" if x > 0 else "🟢 Marcha Normal"))
-    
-    col_tab_m, col_gra_m = st.columns([4, 3])
-    with col_tab_m:
-        st.markdown("#### 🕒 Registro de Marcha y Rendimiento Hora a Hora Online")
-        st.dataframe(df_m1[["Hora", "Meta", "Buenas", "Retrabajo", "Observadas", "Utilización (Min)", "Rendimiento (%)", "Estado"]], use_container_width=True, hide_index=True)
-    with col_gra_m:
-        fig_puesto = go.Figure()
-        fig_puesto.add_trace(go.Scatter(x=df_puesto["Hora"], y=df_puesto["Meta"], mode='lines+markers', name='Meta de Ingeniería', line=dict(color='#8b949e', dash='dash')))
-        fig_puesto.add_trace(go.Bar(x=df_puesto["Hora"], y=df_puesto["Buenas"], name='Buenas Logradas', marker_color='#00cc66'))
-        fig_puesto.update_layout(title="Avance del Ritmo vs Meta de Producción", barmode='group', height=250, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#ffffff"))
-        st.plotly_chart(fig_puesto, use_container_width=True)
-
-elif "2." in capa_activa:
-    st.title("🎯 Capa de Objetivos - Configuración de Ingeniería")
-    st.markdown("---")
-    clave_ing = st.text_input("Ingrese la Clave de Seguridad de Admin:", type="password")
-    
-    if clave_ing == "admin789":
-        st.success("🔓 Acceso Concedido")
-        maq_obj = st.selectbox("Seleccione la Máquina a configurar:", list(st.session_state.db_objetivos.keys()))
-        datos_maq = st.session_state.db_objetivos.get(maq_obj, {})
-        c_obj1, c_obj2 = st.columns(2)
-        with c_obj1:
-            nueva_meta = st.number_input("Establecer nueva Meta de piezas por hora:", min_value=1, value=int(datos_maq.get("Meta_Hora", 50)))
-        with c_obj2:
-            nuevo_prod = st.text_input("Código o Nombre del Producto a fabricar:", value=datos_maq.get("Producto", "Sin Definir"))
-            
-        if st.button("💾 Aplicar Objetivos", use_container_width=True):
-            st.session_state.db_objetivos[maq_obj]["Meta_Hora"] = nueva_meta
-            st.session_state.db_objetivos[maq_obj]["Producto"] = nuevo_prod
-            st.success("¡Objetivos actualizados!")
-
-elif "3." in capa_activa:
-    st.title("📱 Capa de Operario - Terminal Interactiva")
-    st.markdown("---")
-    col_op1, col_op2 = st.columns(2)
-    with col_op1:
-        operario_nom = st.selectbox("Seleccione su Nombre:", ["VILLARROEL ENZO", "FRANCO MAXIMILIANO", "MOREIRA CRISTIAN"])
-        maq_op = st.selectbox("Puesto Físico:", list(st.session_state.db_objetivos.keys()))
-        hora_op = st.selectbox("Hora a declarar:", HORAS_TURNO)
-    with col_op2:
-        buenas_op = st.number_input("Piezas BUENAS:", min_value=0, value=50)
-        ret_op = st.number_input("Piezas RETRABAJO:", min_value=0, value=0)
-        obs_op = st.number_input("Piezas OBSERVADAS:", min_value=0, value=0)
-    if st.button("💾 Enviar Bloque Hora a Hora", use_container_width=True):
-        st.success("¡Registro inyectado online!")
-
-elif "4." in capa_activa:
-    st.title("👔 Capa de Supervisor - Validación y Auditoría")
-    st.dataframe(df_global, use_container_width=True, hide_index=True)
-
-elif "5." in capa_activa:
-    st.markdown("<h2 style='text-align: center; color: #00f2fe;'>SaaS OEE - Vista General de Planta</h2>", unsafe_allow_html=True)
-    st.markdown("---")
-    col_v1, col_v2, col_v3, col_v4, col_cards_g = st.columns([1, 1, 1, 1, 3])
-    
-    Buenas_g = df_global["Buenas"].sum()
-    total_g = Buenas_g + df_global["Retrabajo"].sum() + df_global["Observadas"].sum()
-    disp_g = round(((tiempo_programado - df_global["Min_Parada"].sum()) / tiempo_programado) * 100, 1)
-    perf_g = round((total_g / df_global["Meta"].sum()) * 100, 1)
-    cal_g = round((Buenas_g / total_g) * 100, 1) if total_g > 0 else 100
-    oee_g = round((disp_g/100) * (perf_g/100) * (cal_g/100) * 100, 1)
-
-    with col_v1: st.plotly_chart(draw_scada_gauge("OEE GLOBAL", oee_g), use_container_width=True)
-    with col_v2: st.plotly_chart(draw_scada_gauge("PERFORMANCE", perf_g), use_container_width=True)
-    with col_v3: st.plotly_chart(draw_scada_gauge("DISPONIBILIDAD", disp_g), use_container_width=True)
-    with col_v4: st.plotly_chart(draw_scada_gauge("CALIDAD", cal_g), use_container_width=True)
-
-    with col_cards_g:
-        st.markdown("<br>", unsafe_allow_html=True)
-        cg1, cg2, cg3 = st.columns(3)
-        cg1.metric("MTTR (Calculado)", f"{mttr} min")
-        cg2.metric("MTBF (Calculado)", f"{mtbf} min")
-        cg3.metric("Celdas Conectadas", f"{len(df_global['Maquina'].unique())} Puestos")
-        
-    st.markdown("---")
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        fig_b1 = px.bar(df_global, x="Min_Parada", y="Maquina", color="Falla", orientation='h', height=280)
-        st.plotly_chart(fig_b1, use_container_width=True)
-    with col_b2:
-        df_op_g = df_global.groupby("Operario")["Buenas"].sum().reset_index()
-        fig_b2 = px.bar(df_op_g, x="Buenas", y="Operario", orientation='h', height=280)
-        st.plotly_chart(fig_b2, use_container_width=True)
-
-elif "6." in capa_activa:
-    st.markdown("<h2 style='color: #ffffff;'>📈 Analítica Avanzada e Históricos de Planta</h2>", unsafe_allow_html=True)
-    c_btn1, c_btn2, c_btn3, c_btn4 = st.columns(4)
-    with c_btn1: 
-        if st.button("⏱️ Disponibilidad"): st.session_state.sub_modulo_analisis = "Disponibilidad"
-    with c_btn2: 
-        if st.button("🛑 Paradas"): st.session_state.sub_modulo_analisis = "Paradas"
-    with c_btn3: 
-        if st.button("⚙️ Causas"): st.session_state.sub_modulo_analisis = "Causas"
-    with c_btn4: 
-        if st.button("📦 Producción"): st.session_state.sub_modulo_analisis = "Producción"
-        
-    fig_prod = px.bar(df_global, x="Hora", y=["Buenas", "Retrabajo", "Observadas"], barmode="group", title="Producción")
-    st.plotly_chart(fig_prod, use_container_width=True)
-
-elif "7." in capa_activa:
-    st.markdown("## 🚨 Monitor Andón de Planta (Tiempo Real)")
-    ahora = datetime.now()
-    minutos_transcurridos_turno = (ahora.hour * 60 + ahora.minute) - (6 * 60)
-    minutos_en_hora = minutos_transcurridos_turno % 60
-    if minutos_en_hora == 0: minutos_en_hora = 1
-    
-    cols = st.columns(3)
-    for i, (maq, d) in enumerate(st.session_state.db_objetivos.items()):
-        df_maq = df_global[df_global["Maquina"] == maq]
-        meta_hora_base = d.get("Meta_Hora", 60)
-        meta_proporcional = round((meta_hora_base / 60) * minutos_en_hora)
-        total_buenas = int(df_maq["Buenas"].sum())
-        eficiencia_real = round((total_buenas / meta_proporcional * 100), 1) if meta_proporcional > 0 else 0.0
-        oee = round(eficiencia_real * 0.95, 1) 
-        
-        estado = d.get("Estado_TR", "PARADA")
-        operario = df_maq["Operario"].iloc[-1] if not df_maq.empty else "N/A"
-        evento = d.get("Ultimo_Evento", "Ninguno")
-        
-        clase_andon = "andon-marcha" if estado == "PRODUCIENDO" else ("andon-setup" if estado == "SETUP" else "andon-parada")
-        badge_color = "badge-v" if estado == "PRODUCIENDO" else ("badge-a" if estado == "SETUP" else "badge-r")
-        
-        with cols[i]:
-            st.markdown(f"""
-            <div class="andon-card {clase_andon}">
-                <div class="andon-header">
-                    <span>{maq}</span>
-                    <span class="wiidem-badge {badge_color}">{estado}</span>
-                </div>
-                <div style="margin-top:15px; font-size:14px; color:#8b949e;">PRODUCTO ACTIVO:</div>
-                <div style="font-size:18px; font-weight:bold; color:#ffffff; font-family:sans-serif;">{d.get('Producto','-')}</div>
-                
-                <div class="andon-meta-box">
-                    <table style="width:100%; color:#c9d1d9;">
-                        <tr><td><b>EFFICIENCY:</b></td><td style="text-align:right; color:#00cc66; font-size:18px;"><b>{eficiencia_real}%</b></td></tr>
-                        <tr><td><b>OEE ESTIMADO:</b></td><td style="text-align:right; color:#00f2fe;"><b>{oee}%</b></td></tr>
-                    </table>
-                </div>
-                
-                <div class="andon-meta-box">
-                    <table style="width:100%; font-size:12px;">
-                        <tr><td>META PARCIAL ({minutos_en_hora} min):</td><td style="text-align:right;"><b>{meta_proporcional} pz</b></td></tr>
-                        <tr><td>REAL LOGRADO:</td><td style="text-align:right; color:#00f2fe;"><b>{total_buenas} pz</b></td></tr>
-                    </table>
-                </div>
-                <div style="font-size:11px; color:#8b949e; margin-top:10px;">👤 OP: {operario}</div>
-                <div style="font-size:11px; color:#8b949e;">🚨 ÚLTIMO EVENTO: {evento}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-# Inyección final de la lógica del carrusel de TV
-st.markdown(JS_AUTOMATIZACION, unsafe_allow_html=True)
